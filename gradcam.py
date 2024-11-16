@@ -2,6 +2,7 @@
 
 import torch
 import torchvision
+from torchvision import transforms as T
 import matplotlib
 import matplotlib.pyplot as plt
 from PIL import Image
@@ -12,89 +13,99 @@ from data_utils import *
 from image_utils import *
 from captum_utils import *
 import numpy as np
+import os
 
-from visualizers import GradCam
+# from A3
+SQUEEZENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+SQUEEZENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+def preprocess(img, size=224):
+    transform = T.Compose([
+        T.Resize(size),
+        T.ToTensor(),
+        T.Normalize(mean=SQUEEZENET_MEAN.tolist(),
+                    std=SQUEEZENET_STD.tolist()),
+        T.Lambda(lambda x: x[None]),
+    ])
+    return transform(img)
+def load_imagenet_val(num=None):
+    """Load a handful of validation images from ImageNet.
 
+    Inputs:
+    - num: Number of images to load (max of 25)
+
+    Returns:
+    - X: numpy array with shape [num, 224, 224, 3]
+    - y: numpy array of integer image labels, shape [num]
+    - class_names: dict mapping integer label to class name
+    """
+    imagenet_fn = 'data/imagenet_val_25.npz'
+    if not os.path.isfile(imagenet_fn):
+      print('file %s not found' % imagenet_fn)
+      print('Run the following:')
+      print('cd cs7643/datasets')
+      print('bash get_imagenet_val.sh')
+      assert False, 'Need to download imagenet_val_25.npz'
+    f = np.load(imagenet_fn, allow_pickle=True)
+    X = f['X']
+    y = f['y']
+    class_names = f['label_map'].item()
+    if num is not None:
+        X = X[:num]
+        y = y[:num]
+    return X, y, class_names
+def visualize_attr_maps(path, X, y, class_names, attributions, titles, attr_preprocess=lambda attr: attr.permute(1, 2, 0).detach().numpy(),
+                        cmap='viridis', alpha=0.7):
+    '''
+    A helper function to visualize captum attributions for a list of captum attribution algorithms.
+
+    path (str): name of the final saved image with extension (note: if batch of images are in X,
+                      all images/plots saved together in one final output image with filename equal to path)
+    X (numpy array): shape (N, H, W, C)
+    y (numpy array): shape (N,)
+    class_names (dict): length equal to number of classes
+    attributions(A list of torch tensors): Each element in the attributions list corresponds to an
+                      attribution algorithm, such an Saliency, Integrated Gradient, Perturbation, etc.
+    titles(A list of strings): A list of strings, names of the attribution algorithms corresponding to each element in
+                      the `attributions` list. len(attributions) == len(titles)
+    attr_preprocess: A preprocess function to be applied on each image attribution before visualizing it with
+                      matplotlib. Note that if there are a batch of images and multiple attributions
+                      are visualized at once, this would be applied on each infividual image for each attribution
+                      i.e attr_preprocess(attributions[j][i])
+    '''
+    N = attributions[0].shape[0]
+    plt.figure()
+    for i in range(N):
+        axs = plt.subplot(len(attributions) + 1, N + 1, i + 1)
+        plt.imshow(X[i])
+        plt.axis('off')
+        plt.title(class_names[y[i]])
+
+    plt.subplot(len(attributions) + 1, N + 1, N + 1)
+    plt.text(0.0, 0.5, 'Original Image', fontsize=14)
+    plt.axis('off')
+    for j in range(len(attributions)):
+        for i in range(N):
+            plt.subplot(len(attributions) + 1, N + 1, (N + 1) * (j + 1) + i + 1)
+            attr = np.array(attr_preprocess(attributions[j][i]))
+            attr = (attr - np.mean(attr)) / np.std(attr).clip(1e-20)
+            attr = attr * 0.2 + 0.5
+            attr = attr.clip(0.0, 1.0)
+            plt.imshow(attr, cmap=cmap, alpha=alpha)
+            plt.axis('off')
+        plt.subplot(len(attributions) + 1, N + 1, (N + 1) * (j + 1) + N + 1)
+        plt.text(0.0, 0.5, titles[j], fontsize=14)
+        plt.axis('off')
+
+    plt.gcf().set_size_inches(20, 13)
+    plt.savefig(path, bbox_inches = 'tight')
+    # plt.show()
 
 plt.rcParams['figure.figsize'] = (10.0, 8.0) # set default size of plots
 plt.rcParams['image.interpolation'] = 'nearest'
 plt.rcParams['image.cmap'] = 'gray'
 
+# load flood images from Sen1Floods11/training notebook
 X, y, class_names = load_imagenet_val(num=5)
-
-# FOR THIS SECTION ONLY, we need to use gradients. We introduce a new model we will use explicitly for GradCAM for this.
-gc_model = torchvision.models.squeezenet1_1(pretrained=True)
-gc = GradCam()
-
-X_tensor = torch.cat([preprocess(Image.fromarray(x)) for x in X], dim=0).requires_grad_(True)
-y_tensor = torch.LongTensor(y)
-
-# Guided Back-Propagation
-gbp_result = gc.guided_backprop(X_tensor,y_tensor, gc_model)
-
-plt.figure(figsize=(24, 24))
-for i in range(gbp_result.shape[0]):
-    plt.subplot(1, 5, i + 1)
-    img = gbp_result[i]
-    img = rescale(img)
-    plt.imshow(img)
-    plt.title(class_names[y[i]])
-    plt.axis('off')
-plt.gcf().tight_layout()
-plt.savefig('visualization/guided_backprop.png', bbox_inches = 'tight')
-
-
-
-# GradCam
-# GradCAM. We have given you which module(=layer) that we need to capture gradients from, which you can see in conv_module variable below
-gc_model = torchvision.models.squeezenet1_1(pretrained=True)
-for param in gc_model.parameters():
-    param.requires_grad = True
-
-X_tensor = torch.cat([preprocess(Image.fromarray(x)) for x in X], dim=0).requires_grad_(True)
-y_tensor = torch.LongTensor(y)
-gradcam_result = gc.grad_cam(X_tensor, y_tensor, gc_model)
-
-plt.figure(figsize=(24, 24))
-for i in range(gradcam_result.shape[0]):
-    gradcam_val = gradcam_result[i]
-    img = X[i] + (matplotlib.cm.jet(gradcam_val)[:,:,:3]*255)
-    img = img / np.max(img)
-    plt.subplot(1, 5, i + 1)
-    plt.imshow(img)
-    plt.title(class_names[y[i]])
-    plt.axis('off')
-plt.gcf().tight_layout()
-plt.savefig('visualization/gradcam.png', bbox_inches = 'tight')
-
-
-# As a final step, we can combine GradCam and Guided Backprop to get Guided GradCam.
-X_tensor = torch.cat([preprocess(Image.fromarray(x)) for x in X], dim=0).requires_grad_(True)
-y_tensor = torch.LongTensor(y)
-gradcam_result = gc.grad_cam(X_tensor, y_tensor, gc_model)
-gbp_result = gc.guided_backprop(X_tensor, y_tensor, gc_model)
-
-plt.figure(figsize=(24, 24))
-for i in range(gradcam_result.shape[0]):
-    gbp_val = gbp_result[i]
-    gradcam_val = np.expand_dims(gradcam_result[i], axis=2)
-
-    # Pointwise multiplication and normalization of the gradcam and guided backprop results (2 lines)
-    img = gradcam_val * gbp_val
-
-    # Uncommenting the following 4 code lines and commenting out img = rescale(img) that follows
-    # yields a brownish background. A gray background is obtained if no changes are made.
-    # img = np.expand_dims(img.transpose(2, 0, 1), axis=0)
-    # img = np.float32(img)
-    # img = torch.from_numpy(img)
-    # img = deprocess(img)
-    img = rescale(img)
-    plt.subplot(1, 5, i + 1)
-    plt.imshow(img)
-    plt.title(class_names[y[i]])
-    plt.axis('off')
-plt.gcf().tight_layout()
-plt.savefig('visualization/guided_gradcam.png', bbox_inches = 'tight')
 
 
 # **************************************************************************************** #
