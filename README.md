@@ -9,7 +9,7 @@ Here is our <a href="FloodScan.pdf" target="_blank">paper</a>.
 
 FloodScan: Flood Mapping Semantic Segmentation Using a U-Net Model with Feature Representations of Sentinel-1 and Sentinel-2 Data
 
-Yu Liu, Max Romanelli, Neelima Srivastava, Re ́mi Toutin
+Yu Liu, Max Romanelli, Neelima Srivastava, Rémi Toutin
 
 Georgia Institute of Technology
 
